@@ -4,12 +4,59 @@ This repository describes architectural approaches for running MongoDB with Kube
 
 The goal of this repository is to explain engineering trade-offs and operational considerations when running databases inside Kubernetes.
 
-This is **not a tutorial on installing MongoDB**.
+This repository is **not a tutorial on installing MongoDB**.
 This repository focuses on **architecture decisions and operational trade-offs**.
 
 ---
 
-# MongoDB + Kubernetes: Possible Architectures
+## Why This Repository Exists
+
+Running MongoDB in Kubernetes is widely discussed,
+but many examples focus only on deployment mechanics.
+
+This repository focuses on **storage topology and operational stability**.
+
+It demonstrates a production-oriented architecture where:
+
+- Kubernetes manages Pods
+- storage topology remains predictable
+- MongoDB ReplicaSet handles node failures
+- storage is not dynamically relocated by the orchestrator
+
+The goal is to show a **practical compromise between Kubernetes flexibility and database stability**.
+
+---
+
+## Design Goals
+
+This architecture is designed with the following priorities:
+
+1. **Predictable storage topology**
+
+   MongoDB data must remain attached to known nodes.
+
+2. **Operational simplicity during incidents**
+
+   Engineers must immediately understand where data is located.
+
+3. **Controlled failover**
+
+   MongoDB ReplicaSet should handle node failures,
+   while storage placement remains deterministic.
+
+4. **Minimal reliance on cloud storage orchestration**
+
+   The system should not depend on slow or unpredictable
+   attach/detach operations.
+
+5. **Clear separation of responsibilities**
+
+   Kubernetes manages **process lifecycle**,
+   operators manage **storage topology**.
+
+---
+
+## MongoDB + Kubernetes: Possible Architectures
 
 There are several ways MongoDB can be used together with Kubernetes.
 Each approach has its own advantages, limitations, and appropriate use cases.
@@ -23,7 +70,7 @@ Each approach has its own advantages, limitations, and appropriate use cases.
 
 ---
 
-# 1. MongoDB Outside Kubernetes
+### 1. MongoDB Outside Kubernetes
 
 In this architecture MongoDB runs on separate servers or virtual machines.
 The Kubernetes cluster connects to the database over the network.
@@ -72,7 +119,7 @@ For this reason many production systems keep the database **outside Kubernetes**
 
 ---
 
-# 2. Single MongoDB Instance in Kubernetes
+### 2. Single MongoDB Instance in Kubernetes
 
 MongoDB runs as a single Pod inside Kubernetes.
 
@@ -106,7 +153,7 @@ Typically used for:
 
 ---
 
-# 3. MongoDB ReplicaSet with Dynamic Storage
+### 3. MongoDB ReplicaSet with Dynamic Storage
 
 MongoDB runs as a StatefulSet.
 PersistentVolumeClaims are created automatically through a StorageClass.
@@ -175,7 +222,7 @@ This model prioritizes **speed of infrastructure** over **predictability of stor
 
 ---
 
-# 4. MongoDB ReplicaSet with Controlled Storage
+### 4. MongoDB ReplicaSet with Controlled Storage
 
 MongoDB runs as a StatefulSet, but storage is managed manually.
 
@@ -186,6 +233,32 @@ flowchart LR
     A[worker-1] --> B[Mongo-0] --> C[PV-1]
     D[worker-2] --> E[Mongo-1] --> F[PV-2]
     G[worker-3] --> H[Mongo-2] --> I[PV-3]
+```
+
+```mermaid
+flowchart TB
+
+subgraph Kubernetes Cluster
+    Pod1["MongoDB Pod (mongo-0)"]
+    Pod2["MongoDB Pod (mongo-1)"]
+    Pod3["MongoDB Pod (mongo-2)"]
+end
+
+subgraph Persistent Storage Layer
+    PVC1["PersistentVolumeClaim"]
+    PVC2["PersistentVolumeClaim"]
+    PVC3["PersistentVolumeClaim"]
+end
+
+subgraph Node Storage
+    PV1["PersistentVolume → node-1 disk"]
+    PV2["PersistentVolume → node-2 disk"]
+    PV3["PersistentVolume → node-3 disk"]
+end
+
+Pod1 --> PVC1 --> PV1
+Pod2 --> PVC2 --> PV2
+Pod3 --> PVC3 --> PV3
 ```
 
 ## Architecture Characteristics
@@ -237,10 +310,97 @@ while storage topology remains **explicitly controlled by the operator**.
 
 # Key Engineering Principle
 
-MongoDB handles **node failures well** thanks to ReplicaSet election.
-
-However, MongoDB does **not handle unpredictable storage relocation well**.
+> **Key Engineering Principle**
+>
+> MongoDB handles node failures well.
+> However, MongoDB does **not** handle unpredictable storage relocation well.
+>
+> MongoDB ReplicaSets are designed to handle **node failures**,
+> but they assume that **storage location remains stable**.
 
 Because of this, running MongoDB in Kubernetes often requires controlling **storage topology**, not only Pod orchestration.
 
 This repository demonstrates one such architecture.
+
+---
+
+# PersistentVolume Layout
+
+Each environment contains all resources required to run a MongoDB ReplicaSet inside Kubernetes.
+
+```text
+k8s/
+├── ENV/
+│   ├── dev/
+│   │   ├── mongo-statefulset.yaml
+│   │   ├── mongo-headless-svc.yaml
+│   │   └── mongo-client-svc.yaml
+│   │
+│   ├── stage/
+│   │   ├── mongo-statefulset.yaml
+│   │   ├── mongo-headless-svc.yaml
+│   │   └── mongo-client-svc.yaml
+│   │
+│   ├── prod-1/
+│   │   ├── mongo-statefulset.yaml
+│   │   ├── mongo-headless-svc.yaml
+│   │   └── mongo-client-svc.yaml
+│   │
+│   └── prod-2/
+│       ├── mongo-statefulset.yaml
+│       ├── mongo-headless-svc.yaml
+│       └── mongo-client-svc.yaml
+│
+└── PV/
+    ├── pv-dev-mongo-worker-1.yaml
+    ├── pv-dev-mongo-worker-2.yaml
+    ├── pv-dev-mongo-worker-3.yaml
+    │
+    ├── pv-stage-mongo-worker-1.yaml
+    ├── pv-stage-mongo-worker-2.yaml
+    ├── pv-stage-mongo-worker-3.yaml
+    │
+    ├── pv-prod-1-mongo-worker-1.yaml
+    ├── pv-prod-1-mongo-worker-2.yaml
+    ├── pv-prod-1-mongo-worker-3.yaml
+    │
+    ├── pv-prod-2-mongo-worker-1.yaml
+    ├── pv-prod-2-mongo-worker-2.yaml
+    └── pv-prod-2-mongo-worker-3.yaml
+```
+
+Each environment runs a MongoDB ReplicaSet using a StatefulSet.
+
+* The **Headless Service** is used for internal ReplicaSet communication.
+* The **Client Service** provides stable access for applications inside the cluster.
+* PersistentVolumes are defined separately and pinned to specific nodes.
+
+This separation allows Kubernetes to manage Pod lifecycle while keeping database storage topology predictable.
+
+### Cluster Assumptions
+
+This architecture assumes a Kubernetes cluster with **at least three worker nodes**.
+
+MongoDB ReplicaSet consists of three Pods:
+
+- `mongo-0`
+- `mongo-1`
+- `mongo-2`
+
+Each Pod is scheduled on a **different worker node**.
+
+To guarantee stable data placement, each MongoDB Pod uses a **dedicated storage volume** mapped through Kubernetes storage objects:
+
+```
+node-1 → storage → PV → PVC → mongo-0
+node-2 → storage → PV → PVC → mongo-1
+node-3 → storage → PV → PVC → mongo-2
+```
+
+This results in the following rule:
+
+**1 storage → 1 PersistentVolume → 1 PersistentVolumeClaim → 1 MongoDB Pod**
+
+This mapping guarantees deterministic data placement across cluster nodes.
+
+This design prevents shared-storage issues and keeps MongoDB data placement stable even when Pods are restarted or rescheduled.
