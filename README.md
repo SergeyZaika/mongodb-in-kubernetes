@@ -2,10 +2,7 @@
 
 This repository describes architectural approaches for running MongoDB with Kubernetes and demonstrates a production architecture with **controlled storage topology**.
 
-The goal of this repository is to explain engineering trade-offs and operational considerations when running databases inside Kubernetes.
-
-This repository is **not a tutorial on installing MongoDB**.
-This repository focuses on **architecture decisions and operational trade-offs**.
+The goal is to explain engineering trade-offs and operational considerations when running databases inside Kubernetes — not to be a tutorial on installation.
 
 ---
 
@@ -56,6 +53,18 @@ This architecture is designed with the following priorities:
 
 ---
 
+> **Key Engineering Principle**
+>
+> MongoDB handles node failures well.
+> However, MongoDB does **not** handle unpredictable storage relocation well.
+>
+> MongoDB ReplicaSets are designed to handle **node failures**,
+> but they assume that **storage location remains stable**.
+
+Because of this, running MongoDB in Kubernetes often requires controlling **storage topology**, not only Pod orchestration.
+
+---
+
 ## MongoDB + Kubernetes: Possible Architectures
 
 There are several ways MongoDB can be used together with Kubernetes.
@@ -67,6 +76,15 @@ Each approach has its own advantages, limitations, and appropriate use cases.
 | Single MongoDB instance in Kubernetes | Low | Low | Medium | None |
 | MongoDB ReplicaSet with dynamic storage | Medium | Medium | Low | High |
 | MongoDB ReplicaSet with controlled storage | High | High | High | Medium |
+
+---
+
+## Reality of Production Systems
+
+Most production incidents involving MongoDB in Kubernetes do not originate in the application layer.
+They occur at the intersection of storage, scheduling, and node failure: a volume that cannot reattach, a Pod rescheduled to an unexpected node, or a disk left mounted on a host that never recovered.
+MongoDB replication handles node unavailability — but it cannot compensate for a volume that is physically inaccessible or attached to the wrong host.
+Understanding where the orchestrator's responsibility ends and the database's begins is the central operational challenge this architecture addresses.
 
 ---
 
@@ -308,23 +326,7 @@ while storage topology remains **explicitly controlled by the operator**.
 
 ---
 
-# Key Engineering Principle
-
-> **Key Engineering Principle**
->
-> MongoDB handles node failures well.
-> However, MongoDB does **not** handle unpredictable storage relocation well.
->
-> MongoDB ReplicaSets are designed to handle **node failures**,
-> but they assume that **storage location remains stable**.
-
-Because of this, running MongoDB in Kubernetes often requires controlling **storage topology**, not only Pod orchestration.
-
-This repository demonstrates one such architecture.
-
----
-
-# PersistentVolume Layout
+# Repository Structure
 
 Each environment contains all resources required to run a MongoDB ReplicaSet inside Kubernetes.
 
