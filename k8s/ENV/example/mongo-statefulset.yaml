@@ -113,6 +113,14 @@ spec:
           periodSeconds: 10
           timeoutSeconds: 5
           failureThreshold: 3         
+      # Node affinity restricts scheduling to the three designated MongoDB worker nodes.
+      # It does NOT enforce per-pod pinning (mongo-0 → worker-1, mongo-1 → worker-2, etc.).
+      # The nodeSelectorTerms below are OR-evaluated: any pod may land on any of these nodes.
+      #
+      # The actual per-pod node pinning is enforced by the PersistentVolume nodeAffinity.
+      # Each PV is a local volume bound to a specific node. When a pod claims that PV,
+      # Kubernetes is forced to schedule the pod on the node where the volume resides.
+      # This makes storage topology deterministic without requiring ordinal-aware pod affinity.
       affinity:
         nodeAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
