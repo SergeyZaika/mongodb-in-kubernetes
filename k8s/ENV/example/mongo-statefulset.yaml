@@ -1,0 +1,153 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mongodb
+  namespace: dev
+  labels:
+    app.kubernetes.io/name: mongodb
+spec:
+  serviceName: mongodb-headless
+  replicas: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mongodb
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: mongodb
+    spec:
+      priorityClassName: database-priority
+      securityContext:
+        fsGroup: 999
+      initContainers:
+          - name: write-env-label
+            image: busybox
+            command:
+                - sh
+                - -c
+                - |
+                    echo "env=$ENVIRONMENT" > /mnt/db/environment-label.txt
+                    echo "pod=$(hostname)" >> /mnt/db/environment-label.txt
+            volumeMounts:
+                - name: datadir
+                  mountPath: /mnt/db
+            env:
+                - name: ENVIRONMENT
+                  valueFrom:
+                      fieldRef:
+                          fieldPath: metadata.namespace
+            securityContext:
+                runAsUser: 0
+                runAsGroup: 0
+      containers:
+      - name: mongodb
+        image: mongo:6.0
+        securityContext:   
+          runAsNonRoot: true # Ensure the container does not run as root (UID must not be 0)
+          runAsUser: 999     # Force the container to run processes as user with UID 999
+          allowPrivilegeEscalation: false # Prevent privilege escalation inside the container (sudo)
+        ports:
+        - containerPort: 27017
+        command:
+          - "mongod"
+          - "--auth"
+          - "--replSet"
+          - "rs0"
+          - "--bind_ip_all"
+          - "--keyFile"
+          - "/etc/mongo-keyfile/mongodb-keyfile"
+        env:
+        - name: MONGO_INITDB_ROOT_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: mongodb-secret
+              key: MONGO_INITDB_ROOT_USERNAME
+        - name: MONGO_INITDB_ROOT_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: mongodb-secret
+              key: MONGO_INITDB_ROOT_PASSWORD
+        volumeMounts:
+        - name: datadir
+          mountPath: /data/db
+        - name: mongo-keyfile
+          mountPath: /etc/mongo-keyfile/mongodb-keyfile
+          readOnly: true
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "200m"
+          limits:
+            memory: "1.5Gi"
+            cpu: "800m"
+        startupProbe:
+          exec:
+            command:
+              - mongosh
+              - --quiet
+              - --eval
+              - db.adminCommand('ping')
+          initialDelaySeconds: 15
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 30
+        livenessProbe:
+          exec:
+            command:
+              - mongosh
+              - --quiet
+              - --eval
+              - db.adminCommand('ping')
+          initialDelaySeconds: 60
+          periodSeconds: 15
+          timeoutSeconds: 5
+          failureThreshold: 6
+        readinessProbe:
+          exec:
+            command:
+              - mongosh
+              - --quiet
+              - --eval
+              - db.adminCommand('ping')
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3         
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: kubernetes.io/hostname
+                operator: In
+                values:
+                - worker-1 # pod-0
+            - matchExpressions:
+              - key: kubernetes.io/hostname
+                operator: In
+                values:
+                - worker-2 # pod-1
+            - matchExpressions:
+              - key: kubernetes.io/hostname
+                operator: In
+                values:
+                - worker-3  # pod-2
+      volumes:  # Add the keyFile volume
+      - name: mongo-keyfile
+        hostPath:
+          path: /mnt/mongodb-keyfile
+          type: File     
+  volumeClaimTemplates:
+  - metadata:
+      name: datadir
+    spec:
+      selector:
+        matchLabels:
+          app: mongo-worker # Shared label for PVC and PV
+          env: dev # for choose certain PV
+      accessModes:
+        - ReadWriteOnce
+      resources:
+        requests:
+          storage: 17Gi
+      storageClassName: "" 
